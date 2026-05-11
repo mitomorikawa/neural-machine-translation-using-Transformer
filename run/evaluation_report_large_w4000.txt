@@ -1,0 +1,56 @@
+=== NMT Evaluation Report ===
+Model Checkpoint: ../models/transformer_best_large_w4000.pt
+Beam Size: 4, Alpha: 0.7, Patience: 2.0
+Overall BLEU Score: 51.67
+
+=== First 10 Sample Translations ===
+Sample 1:
+Source:     take a seat .
+Reference:  prends place !
+Prediction: prends place .
+--------------------------------------------------
+Sample 2:
+Source:     i wish tom was here .
+Reference:  j ' aimerais que tom soit là .
+Prediction: j ' aimerais que tom soit là .
+--------------------------------------------------
+Sample 3:
+Source:     how did the audition go ?
+Reference:  comment s ' est passée l ' audition ?
+Prediction: comment s ' en est - il sorti ?
+--------------------------------------------------
+Sample 4:
+Source:     i ' ve never made this kind of mistake before .
+Reference:  je n ' ai jamais fait ce genre d ' erreurs auparavant .
+Prediction: je n ' ai jamais fait ce genre d ' erreur auparavant .
+--------------------------------------------------
+Sample 5:
+Source:     i really don ' t understand what ' s so funny .
+Reference:  je ne comprends vraiment pas ce qui est si drôle .
+Prediction: je ne comprends vraiment pas ce qui est si drôle .
+--------------------------------------------------
+Sample 6:
+Source:     what happened to him ?
+Reference:  que lui est - il arrivé ?
+Prediction: qu ' est - il arrivé à lui ?
+--------------------------------------------------
+Sample 7:
+Source:     take any two cards you like .
+Reference:  prends deux cartes de ton choix .
+Prediction: prends deux cartes que tu veux .
+--------------------------------------------------
+Sample 8:
+Source:     i ' m not scared to die .
+Reference:  je ne crains pas de mourir .
+Prediction: je n ' ai pas peur de mourir .
+--------------------------------------------------
+Sample 9:
+Source:     the clock has stopped .
+Reference:  l ' horloge s ' est arrêtée .
+Prediction: l ' horloge s ' est arrêtée .
+--------------------------------------------------
+Sample 10:
+Source:     you ' d better do what we told you to do .
+Reference:  tu ferais mieux de faire ce qu ' on t ' a dit de faire .
+Prediction: tu ferais mieux de faire ce que nous t ' avons dit de faire .
+--------------------------------------------------
