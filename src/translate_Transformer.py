@@ -4,6 +4,7 @@ from torch import Tensor
 import pickle
 import argparse
 import os
+import time
 
 # Import the custom Seq2SeqTransformer and create_masks
 from library.nn_architectures import Seq2SeqTransformer, create_masks
@@ -29,7 +30,7 @@ def load_vocab(path):
 # ─────────────────────────────────────────────────────────────
 # Main translate function
 # ─────────────────────────────────────────────────────────────
-def translate(model, sentence, src_vocab, tgt_vocab, tokenizer, max_len=50, beam_size=1, alpha=0.7, patience=1.0):
+def translate(model, sentence, src_vocab, tgt_vocab, tokenizer, max_len=50, beam_size=1, alpha=0.7, patience=1.0, kvcache=True):
     """
     model       : trained Seq2SeqTransformer
     sentence    : raw input string (English)
@@ -67,7 +68,8 @@ def translate(model, sentence, src_vocab, tgt_vocab, tokenizer, max_len=50, beam
             model,
             src,
             max_len=max_len,
-            start_symbol=SOS_IDX
+            start_symbol=SOS_IDX,
+            kvcache=kvcache
         ).flatten()
 
     # ── 3. Convert indices → tokens ───────────────────────────
@@ -179,7 +181,8 @@ def beam_search(model, src, max_len, start_symbol, beam_size=4, alpha=0.7, patie
 # ─────────────────────────────────────────────────────────────
 # Greedy decode for custom Seq2SeqTransformer
 # ─────────────────────────────────────────────────────────────
-def greedy_decode(model, src, max_len, start_symbol):
+def greedy_decode(model, src, max_len, start_symbol, kvcache=True):
+    model.reset_cache()
     src = src.to(DEVICE)
     # create dummy target for src mask (since tgt is empty)
     src_padding_mask, _, _ = create_masks(src, src, src.size(1))
@@ -193,26 +196,37 @@ def greedy_decode(model, src, max_len, start_symbol):
     
     # Decoder starts with <sos>
     ys = torch.ones(1, 1).fill_(start_symbol).type(torch.long).to(DEVICE)
-    
+    pos = 0
+    ys_list = [ys]
     for _ in range(max_len - 1):
         _, tgt_padding_mask, causal_mask = create_masks(src, ys, ys.size(1))
         
         # Decode
         tgt_embed = model.tgt_embedding(ys) * math.sqrt(model.d_model)
-        tgt_embed = model.positional_encoding(tgt_embed)
+        tgt_embed = model.positional_encoding(tgt_embed, pos)
         dec_out = tgt_embed
-        for layer in model.decoder_layers:
-            dec_out = layer(dec_out, memory, src_padding_mask, tgt_padding_mask, causal_mask)
+        if kvcache:
+            for layer in model.decoder_layers:
+                dec_out = layer(dec_out, memory, src_padding_mask, tgt_padding_mask, causal_mask, kvcache=True)
+            pos += 1
+        else:
+            for layer in model.decoder_layers:
+                dec_out = layer(dec_out, memory, src_padding_mask, tgt_padding_mask, causal_mask, kvcache=False)
             
         prob = model.output_linear(dec_out[:, -1])
         _, next_word = torch.max(prob, dim=1)
         next_word = next_word.item()
-        
-        ys = torch.cat(
-            [ys, torch.ones(1, 1).type_as(src.data).fill_(next_word)], dim=1
-        )
+        if kvcache:
+            ys = torch.ones(1, 1).type_as(src.data).fill_(next_word)
+            ys_list.append(ys)
+        else:
+            ys = torch.cat(
+                [ys, torch.ones(1, 1).type_as(src.data).fill_(next_word)], dim=1
+            )
         if next_word == EOS_IDX:
             break
+    if kvcache:
+       ys = torch.cat(ys_list, dim=1)
     return ys
 
 
@@ -222,7 +236,7 @@ def main():
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--sentence", type=str, required=True)
     parser.add_argument("--data_dir", type=str, default="../data")
-
+    parser.add_argument("--kvcache", type=lambda x: (str(x).lower() == 'true'), default=True)
     parser.add_argument("--emb_size", type=int, default=512)
     parser.add_argument("--nhead", type=int, default=8)
     parser.add_argument("--num_layers", type=int, default=6)
@@ -268,6 +282,7 @@ def main():
         tokens = sentence.split()  
         return tokens
 
+    start = time.time()
     translation = translate(
         transformer,
         args.sentence,
@@ -276,11 +291,13 @@ def main():
         tokenizer,
         beam_size=args.beam_size,
         alpha=args.alpha,
-        patience=args.patience
+        patience=args.patience,
+        kvcache=args.kvcache
     )
-
+    end = time.time()
     print(f"Input: {args.sentence}")
     print(f"Output: {translation}")
+    print(f"Elapsed time: {end - start} s")
 
 if __name__ == "__main__":
     main()

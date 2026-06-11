@@ -39,6 +39,10 @@ class Seq2SeqTransformer(nn.Module):
             dec_output = layer(dec_output, enc_output, src_padding_mask, tgt_padding_mask, causal_mask)
         output = self.output_linear(dec_output)
         return output
+    
+    def reset_cache(self):
+        for layer in self.decoder_layers:
+            layer.reset_cache()
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -81,17 +85,27 @@ class TransformerDecoderLayer(nn.Module):
         self.dropout3 = nn.Dropout(dropout)
         self.ffn = PositionWiseFeedForward(d_model, d_ff, dropout)
 
-    def forward(self, y, enc_out, src_padding_mask, tgt_padding_mask, tgt_mask):
+    def forward(self, y, enc_out, src_padding_mask, tgt_padding_mask, tgt_mask, kvcache=True):
         norm1_y = self.norm1(y)
-        self_attn_out = self.self_mha(norm1_y, norm1_y, norm1_y, tgt_padding_mask, tgt_mask)
-        y = y + self.dropout1(self_attn_out)
-        norm2_y = self.norm2(y)
-        cross_attn_out = self.cross_mha(norm2_y, enc_out, enc_out, src_padding_mask)
+        if kvcache:
+            self_attn_out = self.self_mha(norm1_y, norm1_y, norm1_y, tgt_padding_mask, tgt_mask, kvcache="self")
+            y = y + self.dropout1(self_attn_out)
+            norm2_y = self.norm2(y)
+            cross_attn_out = self.cross_mha(norm2_y, enc_out, enc_out, src_padding_mask, kvcache="cross")
+        else:
+            self_attn_out = self.self_mha(norm1_y, norm1_y, norm1_y, tgt_padding_mask, tgt_mask)
+            y = y + self.dropout1(self_attn_out)
+            norm2_y = self.norm2(y)
+            cross_attn_out = self.cross_mha(norm2_y, enc_out, enc_out, src_padding_mask)
         y = y + self.dropout2(cross_attn_out)
         norm3_y = self.norm3(y)
         ffn_out = self.ffn(norm3_y)
         y = y + self.dropout3(ffn_out)
         return y
+    
+    def reset_cache(self):
+        self.self_mha.reset_cache()
+        self.cross_mha.reset_cache()
 
 class PositionalEncoding(nn.Module):
     def __init__(self, emb_size: int, dropout: float, maxlen: int = 5000):
@@ -106,8 +120,8 @@ class PositionalEncoding(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.register_buffer('pos_embedding', pos_embedding)
 
-    def forward(self, embedding):
-        return self.dropout(embedding + self.pos_embedding[:, :embedding.size(1), :])
+    def forward(self, embedding, start_pos=0):
+        return self.dropout(embedding + self.pos_embedding[:, start_pos:start_pos + embedding.size(1), :]) # start_pos is necessary when using kvcache. Otherwise it will return the same positional id for every token.
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model, nhead, dropout = 0.1):
@@ -116,23 +130,46 @@ class MultiHeadAttention(nn.Module):
         self.nhead = nhead
         assert d_model % nhead == 0
         self.d_k = d_model // nhead
-
         self.W_q = nn.Linear(d_model, d_model)
         self.W_k = nn.Linear(d_model, d_model)
         self.W_v = nn.Linear(d_model, d_model)
         self.W_o = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
+        self.register_buffer("cache_k", None, persistent=False)
+        self.register_buffer("cache_v", None, persistent=False)
 
-    def forward(self, query_x, key_x, value_x, padding_mask, tgt_mask = None):
+    def forward(self, query_x, key_x, value_x, padding_mask, tgt_mask=None, kvcache=None):
         Q = self.W_q(query_x)
-        K = self.W_k(key_x)
-        V = self.W_v(value_x)
-        
-        Q, K, V = map(lambda x: rearrange(x, 'b n (h d_k) -> b h n d_k', h = self.nhead), (Q, K, V))
+        Q = rearrange(Q, 'b n (h d_k) -> b h n d_k', h=self.nhead)
+
+        if kvcache == "self":
+            K_new = self.W_k(key_x)
+            V_new = self.W_v(value_x)
+            K_new = rearrange(K_new, 'b n (h d_k) -> b h n d_k', h=self.nhead)
+            V_new = rearrange(V_new, 'b n (h d_k) -> b h n d_k', h=self.nhead)
+            if self.cache_k is None:
+                self.cache_k, self.cache_v = K_new, V_new
+            else:
+                self.cache_k = torch.cat([self.cache_k, K_new], dim=2)
+                self.cache_v = torch.cat([self.cache_v, V_new], dim=2)
+            K, V = self.cache_k, self.cache_v
+        elif kvcache == "cross":
+            if self.cache_k is None:
+                K_new = self.W_k(key_x)
+                V_new = self.W_v(value_x)
+                self.cache_k = rearrange(K_new, 'b n (h d_k) -> b h n d_k', h=self.nhead)
+                self.cache_v = rearrange(V_new, 'b n (h d_k) -> b h n d_k', h=self.nhead)
+            K, V = self.cache_k, self.cache_v
+        else:
+            K = self.W_k(key_x)
+            V = self.W_v(value_x)
+            K = rearrange(K, 'b n (h d_k) -> b h n d_k', h=self.nhead)
+            V = rearrange(V, 'b n (h d_k) -> b h n d_k', h=self.nhead)
 
         attention = torch.matmul(Q, K.transpose(-2, -1)) / (self.d_k ** 0.5)
-        attention = attention + padding_mask
-        if tgt_mask is not None:
+        if kvcache is None or kvcache == "cross":
+            attention = attention + padding_mask
+        if tgt_mask is not None and kvcache is None:
             attention = attention + tgt_mask
         attention = torch.nn.functional.softmax(attention, dim = -1)
         attention = self.dropout(attention)
@@ -140,6 +177,9 @@ class MultiHeadAttention(nn.Module):
         output = rearrange(output, 'b h n d_k -> b n (h d_k)', h = self.nhead)
         output = self.W_o(output)
         return output
+    
+    def reset_cache(self):
+        self.cache_k, self.cache_v = None, None
 
 class PositionWiseFeedForward(nn.Module):
     def __init__(self, d_model, d_ff, dropout = 0.1):
