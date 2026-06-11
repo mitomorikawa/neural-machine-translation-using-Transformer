@@ -7,7 +7,7 @@ This repository contains a custom implementation of the Transformer architecture
 
 I trained three variations of our custom Transformer model. Below are the hyperparameter configurations and their corresponding overall BLEU scores on the test set:
 
-### 1. Large Model
+### 1. Large Model (without learning rate scheduler)
 - **Parameters**: `nhead` = 8, `d_model` = 512, `d_ff` = 2048, `num_layers` = 6
 - **BLEU Score**: **58.99**
 
